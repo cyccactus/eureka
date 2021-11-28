@@ -127,6 +127,9 @@ public class ResponseCacheImpl implements ResponseCache {
         this.registry = registry;
 
         long responseCacheUpdateIntervalMs = serverConfig.getResponseCacheUpdateIntervalMs();
+        // 这个类在构建的时候就会延时失效缓存，默认是 180s
+        // expireAfterWrite这个是定期过期
+        // 往读写缓存中写数据的时候，肯定会将这个实例所属的key在配置的时间后就自动失效
         this.readWriteCacheMap =
                 CacheBuilder.newBuilder().initialCapacity(serverConfig.getInitialCapacityOfResponseCache())
                         .expireAfterWrite(serverConfig.getResponseCacheAutoExpirationInSeconds(), TimeUnit.SECONDS)

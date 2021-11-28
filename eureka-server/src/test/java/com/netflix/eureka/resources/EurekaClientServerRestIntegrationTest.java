@@ -24,6 +24,7 @@ import com.netflix.eureka.cluster.protocol.ReplicationList;
 import com.netflix.eureka.cluster.protocol.ReplicationListResponse;
 import com.netflix.eureka.registry.PeerAwareInstanceRegistryImpl.Action;
 import com.netflix.eureka.transport.JerseyReplicationClient;
+import org.eclipse.jetty.server.NCSARequestLog;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.webapp.WebAppContext;
 import org.junit.AfterClass;
@@ -232,7 +233,9 @@ public class EurekaClientServerRestIntegrationTest {
     }
 
     private static void startServer() throws Exception {
-        File warFile = findWar();
+        // 下面的代码是需要把 eureka-server打成一个war包，然后去加载这个war包启动
+        // 在这里每次启动都要打成 war包太麻烦了，自己写一段代码来
+        /*File warFile = findWar();
 
         server = new Server(8080);
 
@@ -243,6 +246,14 @@ public class EurekaClientServerRestIntegrationTest {
 
         server.start();
 
+        eurekaServiceUrl = "http://localhost:8080/v2";*/
+        server = new Server(8080);
+        WebAppContext webAppContext = new WebAppContext(new File("/eureka-server/src/main/webapp").getAbsolutePath(), "/");
+        webAppContext.setDescriptor(new File("eureka-server/src/main/webapp/WEB-INF/web.xml").getAbsolutePath());
+        webAppContext.setResourceBase(new File("/eureka-server/src/main/resources").getAbsolutePath());
+        webAppContext.setClassLoader(Thread.currentThread().getContextClassLoader());
+        server.setHandler(webAppContext);
+        server.start();
         eurekaServiceUrl = "http://localhost:8080/v2";
     }
 
