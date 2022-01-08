@@ -120,6 +120,7 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
         this.recentCanceledQueue = new CircularQueue<Pair<Long, String>>(1000);
         this.recentRegisteredQueue = new CircularQueue<Pair<Long, String>>(1000);
 
+        // 每分钟执行一次
         this.renewsLastMin = new MeasuredRate(1000 * 60 * 1);
 
         this.deltaRetentionTimer.schedule(getDeltaRetentionTask(),
@@ -222,6 +223,8 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
                 synchronized (lock) {
                     if (this.expectedNumberOfClientsSendingRenews > 0) {
                         // Since the client wants to register it, increase the number of clients sending renews
+                        // 每注册一个就 加 1
+                        // 我记得在 eureka 1.7版本是 + 2的，意思就是30s一次，一分钟那就是两次，就 + 2
                         this.expectedNumberOfClientsSendingRenews = this.expectedNumberOfClientsSendingRenews + 1;
                         updateRenewsPerMinThreshold();
                     }
@@ -347,7 +350,7 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
     /**
      * Marks the given instance of the given app name as renewed, and also marks whether it originated from
      * replication.
-     *
+     * 续约机制
      * @see com.netflix.eureka.lease.LeaseManager#renew(java.lang.String, java.lang.String, boolean)
      */
     public boolean renew(String appName, String id, boolean isReplication) {
@@ -383,6 +386,8 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
 
                 }
             }
+            // 每次心跳的时候，都会把这个玩意 + 1
+            // 目的是为了记录每一分钟的实际心跳次数
             renewsLastMin.increment();
             leaseToRenew.renew();
             return true;
@@ -588,6 +593,7 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
     public void evict(long additionalLeaseMs) {
         logger.debug("Running the evict task");
 
+        // 是否允许主动删除掉故障的服务实例-自我保护相关的机制
         if (!isLeaseExpirationEnabled()) {
             logger.debug("DS: lease expiration is currently disabled.");
             return;
@@ -602,6 +608,7 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
             if (leaseMap != null) {
                 for (Entry<String, Lease<InstanceInfo>> leaseEntry : leaseMap.entrySet()) {
                     Lease<InstanceInfo> lease = leaseEntry.getValue();
+                    // 看看这个过期机制 isExpired，很有意思的
                     if (lease.isExpired(additionalLeaseMs) && lease.getHolder() != null) {
                         expiredLeases.add(lease);
                     }
@@ -611,15 +618,23 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
 
         // To compensate for GC pauses or drifting local time, we need to use current registry size as a base for
         // triggering self-preservation. Without that we would wipe out full registry.
+        // 不是一次性摘除过多的服务实例
+        // 假设现在一共有 20个服务实例，现在有4个服务实例不可用了
         int registrySize = (int) getLocalRegistrySize();
+        // 那一次摘除的服务实例是 20 * 0.85
         int registrySizeThreshold = (int) (registrySize * serverConfig.getRenewalPercentThreshold());
+        // 20 - 20 * 0.85(17) = 3
         int evictionLimit = registrySize - registrySizeThreshold;
 
+        // expiredLeases.size()是上面假如4个服务实例不可用
+        // 取最小值就是需要摘除的实例是 3个
         int toEvict = Math.min(expiredLeases.size(), evictionLimit);
         if (toEvict > 0) {
             logger.info("Evicting {} items (expired={}, evictionLimit={})", toEvict, expiredLeases.size(), evictionLimit);
 
             Random random = new Random(System.currentTimeMillis());
+            // 比如失效的实例是 4个，但最多也只能摘除 3个实例
+            // 下面的代码是在 4个实例中摘除 3个
             for (int i = 0; i < toEvict; i++) {
                 // Pick a random item (Knuth shuffle algorithm)
                 int next = i + random.nextInt(expiredLeases.size() - i);
@@ -630,6 +645,7 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
                 String id = lease.getHolder().getId();
                 EXPIRED.increment();
                 logger.warn("DS: Registry: expired lease for {}/{}", appName, id);
+                // 调用的还是服务下线的逻辑，会扔到最近改变的队列中，然后失效缓存
                 internalCancel(appName, id, false);
             }
         }
@@ -1188,6 +1204,9 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
     }
 
     protected void updateRenewsPerMinThreshold() {
+        // expectedNumberOfClientsSendingRenews -> 从相邻的节点拉取过来的服务实例个数，比如 20个服务实例
+        // getExpectedClientRenewalIntervalSeconds -> 就是 一分钟需要发生两次
+        // getRenewalPercentThreshold 默认是 0.85
         this.numberOfRenewsPerMinThreshold = (int) (this.expectedNumberOfClientsSendingRenews
                 * (60.0 / serverConfig.getExpectedClientRenewalIntervalSeconds())
                 * serverConfig.getRenewalPercentThreshold());
@@ -1211,12 +1230,17 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
         }
     }
 
+    /**
+     * 这个方法就是调度执行服务感知故障的
+     * 后台运行一个定时任务
+     */
     protected void postInit() {
         renewsLastMin.start();
         if (evictionTaskRef.get() != null) {
             evictionTaskRef.get().cancel();
         }
         evictionTaskRef.set(new EvictionTask());
+        // 每隔60s执行调度的后台线程任务
         evictionTimer.schedule(evictionTaskRef.get(),
                 serverConfig.getEvictionIntervalTimerInMs(),
                 serverConfig.getEvictionIntervalTimerInMs());
@@ -1245,6 +1269,7 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
         @Override
         public void run() {
             try {
+                // 获取一个补偿时间
                 long compensationTimeMs = getCompensationTimeMs();
                 logger.info("Running the evict task with compensationTime {}ms", compensationTimeMs);
                 evict(compensationTimeMs);
@@ -1258,6 +1283,18 @@ public abstract class AbstractInstanceRegistry implements InstanceRegistry {
          * vs the configured amount of time for execution. This is useful for cases where changes in time (due to
          * clock skew or gc for example) causes the actual eviction task to execute later than the desired time
          * according to the configured cycle.
+         */
+        /**
+         * 获取一个补偿时间，是什么意思呢
+         * 上面的英文注释写的很明确
+         * 是为了避免这个 task两次调度的时间超过了设置的60s
+         * 比如20:00:00是上次执行的时间，那是 20:01:00就应该要执行这个task的，是不是
+         * 那假如现在的时间是 20:02:32才执行这个task，那是不是超过了20:01:00时间的92s了
+         * 那为什么到了 20:02:32才执行这个任务呢。上面的英文注释也写的很明确了。
+         * 比如是 jvm 的 gc造成的这种task没按时执行
+         * 所以这个时间是一个补偿时间，不能算作服务感知的设置的时间，
+         * 需要在那个服务感知设置的时间基础上再加上这个补偿时间
+         * @return
          */
         long getCompensationTimeMs() {
             long currNanos = getCurrentTimeNano();

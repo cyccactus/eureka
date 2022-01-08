@@ -210,6 +210,7 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
         // Copy entire entry from neighboring DS node
         int count = 0;
 
+        // 默认执行 5次
         for (int i = 0; ((i < serverConfig.getRegistrySyncRetries()) && (count == 0)); i++) {
             if (i > 0) {
                 try {
@@ -239,7 +240,10 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
     @Override
     public void openForTraffic(ApplicationInfoManager applicationInfoManager, int count) {
         // Renewals happen every 30 seconds and for a minute it should be a factor of 2.
+        // 一分钟应该要发生两次，30s一次
         this.expectedNumberOfClientsSendingRenews = count;
+        // 下面这行代码是 比如从相邻的节点拉取过来了 20个服务实例
+        // 20 * （60/30） * 0.85 = 34 那就是至少期望的最少心跳次数是 34
         updateRenewsPerMinThreshold();
         logger.info("Got {} instances from neighboring DS node", count);
         logger.info("Renew threshold is: {}", numberOfRenewsPerMinThreshold);
@@ -255,6 +259,7 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
         }
         logger.info("Changing status to UP");
         applicationInfoManager.setInstanceStatus(InstanceStatus.UP);
+        // 上面一堆废话，没什么用，真正感知服务故障的就是下面这一行代码
         super.postInit();
     }
 
@@ -479,10 +484,18 @@ public class PeerAwareInstanceRegistryImpl extends AbstractInstanceRegistry impl
 
     @Override
     public boolean isLeaseExpirationEnabled() {
+        // 默认是 true。如果改为 false就是关闭自我保护机制，直接 return true。随时清理故障的服务实例
         if (!isSelfPreservationModeEnabled()) {
             // The self preservation mode is disabled, hence allowing the instances to expire.
             return true;
         }
+        // numberOfRenewsPerMinThreshold -> 就是期望一分钟要有多少次心跳发送过来，比如 一分钟100次心跳
+        // 这个期望值是怎么算出来的呢，在这个类的 244 行有明确的计算方法
+        // getNumOfRenewsInLastMin -> 上一次所有服务实例一共发送过来多少次心跳，比如102次
+        // 那上一次发送多少次心跳是怎么计算出来的呢
+        //
+        // 如果上一次的心跳次数是(102)。期望的是 100次，那就返回 true，就可以清理故障的服务实例
+        // 如果上一次的心跳次数太少了(30次)，那就返回 false
         return numberOfRenewsPerMinThreshold > 0 && getNumOfRenewsInLastMin() > numberOfRenewsPerMinThreshold;
     }
 

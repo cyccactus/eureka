@@ -89,7 +89,8 @@ public class InstanceResource {
 
     /**
      * A put request for renewing lease from a client instance.
-     *
+     * 真正接收续约心跳检测的请求接口在这里
+     * 真难找啊，Jersey框架真不熟悉
      * @param isReplication
      *            a header parameter containing information whether this is
      *            replicated from other nodes.
@@ -109,6 +110,7 @@ public class InstanceResource {
             @QueryParam("status") String status,
             @QueryParam("lastDirtyTimestamp") String lastDirtyTimestamp) {
         boolean isFromReplicaNode = "true".equals(isReplication);
+        // 处理服务续约的逻辑
         boolean isSuccess = registry.renew(app.getName(), id, isFromReplicaNode);
 
         // Not found in the registry, immediately ask for a register

@@ -60,6 +60,10 @@ public class Lease<T> {
      * {@link #DEFAULT_DURATION_IN_SECS}.
      */
     public void renew() {
+        // 这里就是服务每发送一次心跳，保持心跳，靠的就是这个lastUpdateTimestamp
+        // 就是最近一次活跃的时间，duration默认是 90s
+        // 这里其实涉及到了eureka的一个小小的bug
+        // 在服务感知故障那里，我有写注释
         lastUpdateTimestamp = System.currentTimeMillis() + duration;
 
     }
@@ -107,7 +111,21 @@ public class Lease<T> {
      *
      * @param additionalLeaseMs any additional lease time to add to the lease evaluation in ms.
      */
+    /**
+     * 上面写的很明确。the "wrong"
+     * 下面这个方法有一小断的bug，eureka也意识到了，但也没打算去修改
+     * @param additionalLeaseMs
+     * @return
+     */
     public boolean isExpired(long additionalLeaseMs) {
+        // lastUpdateTimestamp在 renewal方法里其实是已经加了 duration的，相当于心跳的那个时间往后加了duration
+        // 代表最近一次这个服务的活跃时间
+        // 下面这行代码的意思就是
+        // 当前时间是否大于上一次的心跳时间+duration(默认90s)+additionalLeaseMs(就是前面计算的补偿时间)
+        // 所以这个 duration加了两次  the expiry will actually be 2 * duration 英文写的很明确
+        // 所以过期时间是 当前时间要大于 上次时间(这里已经加了一次 duration)+duration+补偿时间，才基本算过期
+        // 但数据同步的时间，缓存失效还得同步呢，30s才同步一次到 只读缓存，然后client也需要30s才会重新拉取增量注册表
+        // 所以client感知到服务失效的时间可能需要 4-5分钟
         return (evictionTimestamp > 0 || System.currentTimeMillis() > (lastUpdateTimestamp + duration + additionalLeaseMs));
     }
 

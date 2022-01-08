@@ -120,7 +120,7 @@ public class ApplicationResource {
 
     /**
      * Gets information about a particular instance of an application.
-     *
+     * 接收心跳检测  续约机制的请求
      * @param id
      *            the unique identifier of the instance.
      * @return information about a particular instance.
